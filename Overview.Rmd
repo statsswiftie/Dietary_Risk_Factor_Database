@@ -1,0 +1,237 @@
+---
+title: "Dietary Risk Factor Dose-Response Curves"
+author: "A. Jacob"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+```
+
+#Step 1 - Import Data
+This is an excel version of Table 2 from the manuscript located in the folder "data". 
+
+```{r summary}
+associations <- read_excel(file.path("data","Table2.xlsx"))
+```
+
+#Step 2 - Clean the Data
+This step removes food category headers, simplifies the linearity and grade coding, and assigns each risk-outcome pair a numeric code. 
+
+```{r dataclean}
+associations <- associations[!is.na(associations$Exposure),]
+
+associations$`Linearity `<- sub(" .*", "", associations$`Linearity `)
+associations$`Linearity ` <- gsub("[–—−]", "-", 
+                            gsub("[[:space:]]+", "", 
+                              gsub("\u00A0", "", 
+                                trimws(tolower(associations$`Linearity `)))))  
+
+associations$Grade <- sub("\u00A0.*", "", associations$Grade) #strange spacing in the column
+associations$Grade <- sub(" .*", "", associations$Grade)
+
+associations$code <- row.names(associations)
+
+main_key <- associations[,c(9,1,2,3,4,5,6,7,8)] #Exposure, Outcome, Grade, Linearity
+```
+
+#Step 3 - Functions of the Lines
+
+```{r linefunction}
+
+linear_function <-  function(R,d,x) {
+  exp((log(R)/d)*x)
+}
+
+non_linear_function <- function(x_coords, y_coords) {
+  function(z) {
+    idx <- findInterval(z, x_coords, rightmost.closed = TRUE)
+    ifelse(idx == 0, y_coords[1], 
+           ifelse(idx > length(y_coords), y_coords[length(y_coords)], y_coords[idx])) #last point is continuous
+  }
+} 
+
+```
+
+#Step 4 - Linear Data
+
+```{r lineardata}
+linear_assoc <- main_key[main_key$`Linearity `=="linear",]
+linear_assoc <- linear_assoc %>%
+  mutate(
+    value = str_extract(`Dose/Units `, "^[0-9.]+"),
+    unit = str_extract(`Dose/Units `, "[^0-9.].*")
+  )
+linear_assoc$code <- as.numeric(linear_assoc$code)
+linear_assoc$value <- as.numeric(linear_assoc$value)
+linear_assoc[linear_assoc$code==2, "value"] <- 355
+```
+
+#Step 4B - Linear Curves
+
+```{r linearcurves}
+linear_curve <- linear_assoc[,c(1,6,10,11)]
+linear_curve$rr <- linear_curve$`RR [95% CI]` <- sub("\\[.*", "", linear_curve$`RR [95% CI]`)
+linear_curve$rr <- as.numeric(linear_curve$rr)
+```
+
+#Step 4C - Linear Functions
+Creates a list of the linear function according to their code. Uncertainty is not replicated, this is left to the discretion of the user. 
+
+```{r linearfunctions}
+linear_functions <- list()
+
+for(i in seq_len(nrow(linear_curve))){
+  code_p <- linear_curve$code[i]
+  rr_p <- linear_curve$rr[i]
+  dose_p <- linear_curve$value[i]
+  
+  linear_functions[[paste0("function_",code_p)]] <- local({
+    R <- rr_p
+    d <- dose_p
+    function(x) linear_function(R,d,x)
+  })
+}
+```
+
+#Step 5 - Non-Linear Curve Data
+
+```{r nonlinear data}
+non_linear_assoc <- main_key[main_key$`Linearity `=="non-linear",]
+
+```
+
+#Step 5B - Non-Linear Curves
+
+```{r nonlinear curves}
+csv_files <- list.files(path = file.path("data", "CSV coordinates"), pattern = "\\.csv$", full.names = TRUE)
+csv_list <- lapply(csv_files, read.csv)
+names(csv_list) <- tools::file_path_sans_ext(basename(csv_files))
+```
+
+#Step 5C - Non-Linear Functions
+
+```{r nonlinear functions}
+nonlin_functions <- lapply(csv_list, function(df) {
+  x <- df[[1]]  
+  y <- df[[2]]  
+  non_linear_function(x, y)
+})
+
+new_names <- paste0("function_", sub("^code", "", names(csv_list)))
+names(nonlin_functions) <- new_names
+```
+
+#Step 6 - Plots 
+
+```{r linear}
+output_dir <- file.path("plots")
+dir.create(output_dir, showWarnings = FALSE)
+
+
+for (i in seq_len(nrow(linear_curve))) {
+  code_p <- linear_curve$code[i]
+  R <- linear_curve$rr[i]
+  d <- linear_curve$value[i]
+  
+  # Generate smooth sequence for 0–5*d
+  x_vals <- seq(0, 5 * d, length.out = 200)
+  y_vals <- linear_function(R, d, x_vals)
+  
+  # Metadata
+  unit <- linear_assoc$unit[linear_assoc$code == code_p]
+  if (length(unit) == 0) unit <- "unknown unit"
+  
+  x_label <- paste("Intake (", unit, ")", sep = "")
+  title <- paste(linear_assoc$Exposure[linear_assoc$code == code_p],
+                 "and",
+                 linear_assoc$`Outcome `[linear_assoc$code == code_p])
+  
+  # Save PNG
+  png_filename <- file.path(output_dir, paste0("plot_linear_", code_p, ".png"))
+  png(png_filename, width = 600, height = 400)
+  
+  plot(x_vals, y_vals,
+       type = "l", lwd = 2, col = "blue",
+       xlab = x_label, ylab = "Relative Risk",
+       main = title,
+       xlim = c(0, 5 * d),
+       ylim = range(y_vals))
+  
+  points(x_vals, y_vals, pch = 16, col = "blue", cex = 0.6)
+  
+  dev.off()
+}
+```
+
+```{r nonlinear}
+output_dir <- file.path("plots")
+dir.create(output_dir)
+
+for (i in seq_along(csv_list)) {
+  csv_data <- csv_list[[i]]
+  x_vals <- csv_data[[1]]
+  y_vals <- csv_data[[2]]
+  
+  fn_name <- if (!is.null(names(csv_list))) names(csv_list)[i] else paste0("Function_", i)
+
+  match_key <- sub("^code", "", fn_name)
+  
+  unit <- non_linear_assoc$`Dose/Units `[non_linear_assoc$code == match_key]
+  if (length(unit) == 0) {
+    unit <- "unknown unit"  # fallback if no match
+  }
+
+  x_label <- paste("Intake (", unit, ")", sep = "")
+  
+  title <- paste(non_linear_assoc$Exposure[non_linear_assoc$code == match_key]," and ",non_linear_assoc$`Outcome `[non_linear_assoc$code == match_key])
+  
+  ord <- order(x_vals)
+  x_vals <- x_vals[ord]
+  y_vals <- y_vals[ord]
+
+  png_filename <- file.path(output_dir, paste0("plot_", fn_name, ".png"))
+  png(png_filename, width = 600, height = 400)
+
+    plot(NULL, xlim = c(min(x_vals) - 1, max(x_vals) + 1),
+       ylim = range(y_vals) + c(-1, 1),
+       xlab = x_label, ylab = "Relative Risk",
+       main = title,  
+       type = "n")
+
+  for (j in 1:(length(x_vals) - 1)) {
+    segments(x_vals[j], y_vals[j], x_vals[j + 1], y_vals[j], col = "blue", lwd = 2)
+    points(x_vals[j], y_vals[j], pch = 16, col = "blue")
+    points(x_vals[j + 1], y_vals[j], pch = 1, col = "blue")
+  }
+
+  segments(x_vals[length(x_vals)], y_vals[length(y_vals)],
+           max(x_vals) + 2, y_vals[length(y_vals)], col = "blue", lwd = 2)
+  points(x_vals[length(x_vals)], y_vals[length(y_vals)], pch = 16, col = "blue")
+
+  dev.off()
+}
+
+```
+The error is thrown due to code95 not being codable into a plot. This function does not follow regular axis intervals. 
+
+#Step 7 - Use and Example
+
+There are now 101 functions that can be used as well as plot outputs for visualisation of curves. Note that uncertainty is not accounted for here and the user will need to determine how they would like to estimate uncertainty in their given study. To use the functions, one simply needs to call it as seen below.
+
+```{r example of function use}
+#I would like to know the risk estimate for dementia based on fish intake (this is a linear association - code66)
+linear_functions$function_66(10) #10g/day
+linear_functions$function_66(50) #50g/day
+linear_functions$function_66(100) #100g/day
+
+#What about whole grain intake and CVD incidence? (non-linear association - code18)
+nonlin_functions$function_18(10)
+nonlin_functions$function_18(50)
+nonlin_functions$function_18(100)
+```
