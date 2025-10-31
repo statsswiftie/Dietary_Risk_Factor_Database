@@ -1,5 +1,5 @@
 ---
-title: "Dietary Risk Factor Dose-Response Curves"
+title: "Dietary Risk Factor Dose-Response Curves V2.0"
 author: "A. Jacob"
 date: "`r Sys.Date()`"
 output: html_document
@@ -17,7 +17,7 @@ library(ggplot2)
 This is an excel version of Table 2 from the manuscript located in the folder "data". 
 
 ```{r summary}
-associations <- read_excel(file.path("data","Table2.xlsx"))
+associations <- read_excel(file.path("data","Table2_all.xlsx"))
 ```
 
 #Step 2 - Clean the Data
@@ -26,26 +26,30 @@ This step removes food category headers, simplifies the linearity and grade codi
 ```{r dataclean}
 associations <- associations[!is.na(associations$Exposure),]
 
-associations$`Linearity `<- sub(" .*", "", associations$`Linearity `)
-associations$`Linearity ` <- gsub("[–—−]", "-", 
+associations$Linearity <- sub(" .*", "", associations$Linearity)
+
+associations$Linearity <- gsub("[–—−]", "-", 
                             gsub("[[:space:]]+", "", 
                               gsub("\u00A0", "", 
-                                trimws(tolower(associations$`Linearity `)))))  
+                                trimws(tolower(associations$Linearity)))))  
 
-associations$Grade <- sub("\u00A0.*", "", associations$Grade) #strange spacing in the column
-associations$Grade <- sub(" .*", "", associations$Grade)
+associations$Grade2 <- sub("\u00A0.*", "", associations$Grade2) #strange spacing in the column
+associations$Grade2 <- sub(" .*", "", associations$Grade2)
+associations$Grade2 <- substr(associations$Grade2, 1, nchar(associations$Grade2) - 1) #remove subscript
 
 associations$code <- row.names(associations)
 
-main_key <- associations[,c(9,1,2,3,4,5,6,7,8)] #Exposure, Outcome, Grade, Linearity
+main_key <- associations[,c(13,2,3,4,5,10,11)] #Exposure, Outcome, Grade, Linearity
 ```
 
 #Step 3 - Functions of the Lines
 
 ```{r linefunction}
 
-linear_function <-  function(R,d,x) {
-  exp((log(R)/d)*x)
+linear_function <-  function(R,lower,upper,d,x) {
+  estimate <- exp((log(R)/d)*x)
+  lower_bound <- exp(log(lower)/d*x)
+  upper_bound <- exp(log(upper)/d*x)
 }
 
 non_linear_function <- function(x_coords, y_coords) {
@@ -59,42 +63,52 @@ non_linear_function <- function(x_coords, y_coords) {
 ```
 
 #Step 4 - Linear Data
+All associations are included - either linear or summary estimates provided. 
 
 ```{r lineardata}
-linear_assoc <- main_key[main_key$`Linearity `=="linear",]
+
+linear_assoc <- main_key
+
+linear_assoc$`Dose/Metric` <- gsub("\\s+", "", linear_assoc$`Dose/Metric`) #removes spaces
+
+linear_assoc$`Dose/Metric` <- sub("([a-zA-Zµ]+)[0-9]+$", "\\1", linear_assoc$`Dose/Metric`) #remove trailing digits (superscript)
+
 linear_assoc <- linear_assoc %>%
-  mutate(
-    value = str_extract(`Dose/Units `, "^[0-9.]+"),
-    unit = str_extract(`Dose/Units `, "[^0-9.].*")
-  )
-linear_assoc$code <- as.numeric(linear_assoc$code)
-linear_assoc$value <- as.numeric(linear_assoc$value)
-linear_assoc[linear_assoc$code==2, "value"] <- 355
+  extract(`Dose/Metric`, into = c("Dose", "Metric"),
+          regex = "([0-9\\.]+)([a-zA-Zµ]+)", remove = TRUE) #dose and metric separated
+
+linear_assoc$Dose <- as.numeric(linear_assoc$Dose)
+
+#note that association code 63 is 100 to 200g
+
+colnames(linear_assoc)[6] <- "RR" 
+
+linear_assoc <- linear_assoc %>%
+  extract(RR, 
+          into = c("Estimate", "Lower", "Upper"),
+          regex = "([0-9\\.]+)\\s*\\[([0-9\\.]+)-([0-9\\.]+)\\]",
+          convert = TRUE)
 ```
 
-#Step 4B - Linear Curves
-
-```{r linearcurves}
-linear_curve <- linear_assoc[,c(1,6,10,11)]
-linear_curve$rr <- linear_curve$`RR [95% CI]` <- sub("\\[.*", "", linear_curve$`RR [95% CI]`)
-linear_curve$rr <- as.numeric(linear_curve$rr)
-```
-
-#Step 4C - Linear Functions
-Creates a list of the linear function according to their code. Uncertainty is not replicated, this is left to the discretion of the user. 
+#Step 4B - Linear Functions
+Creates a list of the linear function according to their code. Uncertainty is replicated in upper and lower bounds. 
 
 ```{r linearfunctions}
 linear_functions <- list()
 
-for(i in seq_len(nrow(linear_curve))){
-  code_p <- linear_curve$code[i]
-  rr_p <- linear_curve$rr[i]
-  dose_p <- linear_curve$value[i]
+for(i in seq_len(nrow(linear_assoc))){
+  code_p <- linear_assoc$code[i]
+  rr_p <- linear_assoc$Estimate[i]
+  lower_p <- linear_assoc$Lower[i]
+  upper_p <- linear_assoc$Upper[i]
+  dose_p <- linear_assoc$Dose[i]
   
   linear_functions[[paste0("function_",code_p)]] <- local({
     R <- rr_p
+    lower <- lower_p
+    upper <- upper_p
     d <- dose_p
-    function(x) linear_function(R,d,x)
+    function(x) linear_function(R,lower,upper,d,x)
   })
 }
 ```
@@ -102,8 +116,7 @@ for(i in seq_len(nrow(linear_curve))){
 #Step 5 - Non-Linear Curve Data
 
 ```{r nonlinear data}
-non_linear_assoc <- main_key[main_key$`Linearity `=="non-linear",]
-
+non_linear_assoc <- main_key[main_key$Linearity=="non-linear",]
 ```
 
 #Step 5B - Non-Linear Curves
