@@ -174,21 +174,22 @@ names(nonlin_functions) <- new_names
 output_dir <- file.path("plots")
 dir.create(output_dir, showWarnings = FALSE)
 
+linear_plots <- linear_assoc[linear_assoc$Linearity == "linear",]
 
-for (i in seq_len(nrow(linear_assoc))) {
+for (i in seq_len(nrow(linear_plots))) {
   
   # Row-specific values
-  code_p <- linear_assoc$code[i]
-  R <- linear_assoc$Estimate[i]
-  lower <- linear_assoc$Lower[i]
-  upper <- linear_assoc$Upper[i]
-  d <- linear_assoc$Dose[i]
+  code_p <- linear_plots$code[i]
+  R <- linear_plots$Estimate[i]
+  lower <- linear_plots$Lower[i]
+  upper <- linear_plots$Upper[i]
+  d <- linear_plots$Dose[i]
   
-  unit <- linear_assoc$Metric[i]
+  unit <- linear_plots$Metric[i]
   if (is.na(unit) || unit == "") unit <- "unknown unit"
   
-  exposure <- linear_assoc$Exposure[i]
-  outcome <- linear_assoc$Outcome[i]  
+  exposure <- linear_plots$Exposure[i]
+  outcome <- linear_plots$Outcome[i]  
   title <- paste(exposure, "and", outcome)
   x_label <- paste0("Intake ", unit, "/day")
   
@@ -234,14 +235,13 @@ for (i in seq_along(csv_list)) {
 
   match_key <- sub("^code", "", fn_name)
   
-  unit <- non_linear_assoc$Metric[non_linear_assoc$code == match_key]
-  if (length(unit) == 0) {
-    unit <- "unknown unit"  # fallback if no match
-  }
-
-  title <- paste(exposure, "and", outcome)
-  x_label <- paste("Intake ", unit, "/day", sep = "")
+  unit <- non_linear_assoc$Metric[i]
+  if (is.na(unit) || unit == "") unit <- "unknown unit"
   
+  exposure <- non_linear_assoc$Exposure[i]
+  outcome <- non_linear_assoc$Outcome[i]  
+  title <- paste(exposure, "and", outcome)
+  x_label <- paste0("Intake ", unit, "/day")
   ord <- order(x_vals)
   x_vals <- x_vals[ord]
   y_vals <- y_vals[ord]
