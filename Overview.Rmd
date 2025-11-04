@@ -46,10 +46,18 @@ main_key <- associations[,c(13,2,3,4,5,10,11)] #Exposure, Outcome, Grade, Linear
 
 ```{r linefunction}
 
-linear_function <-  function(R,lower,upper,d,x) {
+linear_function <-  function(R,d,x) {
+  exp((log(R)/d)*x)
+}
+
+linear_function_CI <- function(R, lower, upper, d, x) {
   estimate <- exp((log(R)/d)*x)
   lower_bound <- exp(log(lower)/d*x)
   upper_bound <- exp(log(upper)/d*x)
+  cat("x =", x, "\n")
+  cat("Estimate =", estimate, "\n")
+  cat("Lower bound =", lower_bound, "\n")
+  cat("Upper bound =", upper_bound, "\n")
 }
 
 non_linear_function <- function(x_coords, y_coords) {
@@ -99,16 +107,32 @@ linear_functions <- list()
 for(i in seq_len(nrow(linear_assoc))){
   code_p <- linear_assoc$code[i]
   rr_p <- linear_assoc$Estimate[i]
-  lower_p <- linear_assoc$Lower[i]
-  upper_p <- linear_assoc$Upper[i]
   dose_p <- linear_assoc$Dose[i]
   
   linear_functions[[paste0("function_",code_p)]] <- local({
     R <- rr_p
+    d <- dose_p
+    function(x) linear_function(R,d,x)
+  })
+}
+```
+
+```{r linearfunctions CI}
+linear_functions_CI <- list()
+
+for (i in seq_len(nrow(linear_assoc))) {
+  code_p <- linear_assoc$code[i]
+  rr_p <- linear_assoc$Estimate[i]
+  lower_p <- linear_assoc$Lower[i]
+  upper_p <- linear_assoc$Upper[i]
+  dose_p <- linear_assoc$Dose[i]
+  
+  linear_functions_CI[[paste0("function_CI_", code_p)]] <- local({
+    R <- rr_p
     lower <- lower_p
     upper <- upper_p
     d <- dose_p
-    function(x) linear_function(R,lower,upper,d,x)
+    function(x) linear_function_CI(R, lower, upper, d, x)
   })
 }
 ```
@@ -117,6 +141,10 @@ for(i in seq_len(nrow(linear_assoc))){
 
 ```{r nonlinear data}
 non_linear_assoc <- main_key[main_key$Linearity=="non-linear",]
+
+non_linear_assoc <- non_linear_assoc %>%
+  extract(`Dose/Metric`, into = c("Dose", "Metric"),
+          regex = "([0-9\\.]+)([a-zA-Zµ]+)", remove = TRUE) #dose and metric separated
 ```
 
 #Step 5B - Non-Linear Curves
@@ -147,36 +175,47 @@ output_dir <- file.path("plots")
 dir.create(output_dir, showWarnings = FALSE)
 
 
-for (i in seq_len(nrow(linear_curve))) {
-  code_p <- linear_curve$code[i]
-  R <- linear_curve$rr[i]
-  d <- linear_curve$value[i]
+for (i in seq_len(nrow(linear_assoc))) {
   
-  # Generate smooth sequence for 0–5*d
-  x_vals <- seq(0, 5 * d, length.out = 200)
-  y_vals <- linear_function(R, d, x_vals)
+  # Row-specific values
+  code_p <- linear_assoc$code[i]
+  R <- linear_assoc$Estimate[i]
+  lower <- linear_assoc$Lower[i]
+  upper <- linear_assoc$Upper[i]
+  d <- linear_assoc$Dose[i]
   
-  # Metadata
-  unit <- linear_assoc$unit[linear_assoc$code == code_p]
-  if (length(unit) == 0) unit <- "unknown unit"
+  unit <- linear_assoc$Metric[i]
+  if (is.na(unit) || unit == "") unit <- "unknown unit"
   
-  x_label <- paste("Intake (", unit, ")", sep = "")
-  title <- paste(linear_assoc$Exposure[linear_assoc$code == code_p],
-                 "and",
-                 linear_assoc$`Outcome `[linear_assoc$code == code_p])
+  exposure <- linear_assoc$Exposure[i]
+  outcome <- linear_assoc$Outcome[i]  
+  title <- paste(exposure, "and", outcome)
+  x_label <- paste0("Intake ", unit, "/day")
   
-  # Save PNG
+  # X axis goes from zero to dose
+  x_vals <- seq(0, d, length.out = 200)
+  
+  # Compute estimate, lower, upper
+  estimate <- exp((log(R)/d) * x_vals)
+  lower_bound <- exp((log(lower)/d) * x_vals)
+  upper_bound <- exp((log(upper)/d) * x_vals)
+  
+  # Output files
   png_filename <- file.path(output_dir, paste0("plot_linear_", code_p, ".png"))
-  png(png_filename, width = 600, height = 400)
+  png(png_filename, width = 800, height = 600)
   
-  plot(x_vals, y_vals,
-       type = "l", lwd = 2, col = "blue",
-       xlab = x_label, ylab = "Relative Risk",
-       main = title,
-       xlim = c(0, 5 * d),
-       ylim = range(y_vals))
+  # Plot setup
+  plot(x_vals, estimate, type = "n", 
+       xlab = x_label, ylab = "Relative Risk", main = title,
+       xlim = c(0, d), ylim = range(c(lower_bound, upper_bound, estimate)))
   
-  points(x_vals, y_vals, pch = 16, col = "blue", cex = 0.6)
+  # Uncertainty bands
+  polygon(c(x_vals, rev(x_vals)), c(upper_bound, rev(lower_bound)),
+          col = rgb(0, 0, 1, 0.2), border = NA)
+  
+  # Draw main line and points
+  lines(x_vals, estimate, col = "blue", lwd = 2)
+  points(x_vals, estimate, col = "blue", pch = 16, cex = 0.6)
   
   dev.off()
 }
@@ -195,24 +234,26 @@ for (i in seq_along(csv_list)) {
 
   match_key <- sub("^code", "", fn_name)
   
-  unit <- non_linear_assoc$`Dose/Units `[non_linear_assoc$code == match_key]
+  unit <- non_linear_assoc$Metric[non_linear_assoc$code == match_key]
   if (length(unit) == 0) {
     unit <- "unknown unit"  # fallback if no match
   }
 
-  x_label <- paste("Intake (", unit, ")", sep = "")
-  
-  title <- paste(non_linear_assoc$Exposure[non_linear_assoc$code == match_key]," and ",non_linear_assoc$`Outcome `[non_linear_assoc$code == match_key])
+  title <- paste(exposure, "and", outcome)
+  x_label <- paste("Intake ", unit, "/day", sep = "")
   
   ord <- order(x_vals)
   x_vals <- x_vals[ord]
   y_vals <- y_vals[ord]
 
+  #File name
   png_filename <- file.path(output_dir, paste0("plot_", fn_name, ".png"))
+  
+  #Plots
   png(png_filename, width = 600, height = 400)
 
     plot(NULL, xlim = c(min(x_vals) - 1, max(x_vals) + 1),
-       ylim = range(y_vals) + c(-1, 1),
+       ylim = range(y_vals) + c(-0.5, 0.5),
        xlab = x_label, ylab = "Relative Risk",
        main = title,  
        type = "n")
@@ -231,7 +272,6 @@ for (i in seq_along(csv_list)) {
 }
 
 ```
-The error is thrown due to code95 not being codable into a plot. This function does not follow regular axis intervals. 
 
 #Step 7 - Use and Example
 
@@ -242,8 +282,9 @@ There are now 101 functions that can be used as well as plot outputs for visuali
 linear_functions$function_66(10) #10g/day
 linear_functions$function_66(50) #50g/day
 linear_functions$function_66(100) #100g/day
+linear_functions_CI$function_CI_66(10) #gives the estimate along with CI
 
-#What about whole grain intake and CVD incidence? (non-linear association - code18)
+#What about SSBs intake and Prostate Cancer incidence? (non-linear association - code18)
 nonlin_functions$function_18(10)
 nonlin_functions$function_18(50)
 nonlin_functions$function_18(100)
