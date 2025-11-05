@@ -223,51 +223,66 @@ for (i in seq_len(nrow(linear_plots))) {
 ```
 
 ```{r nonlinear}
-output_dir <- file.path("plots")
-dir.create(output_dir)
+#Match CSV List to Non Linear Associations
 
-for (i in seq_along(csv_list)) {
-  csv_data <- csv_list[[i]]
-  x_vals <- csv_data[[1]]
-  y_vals <- csv_data[[2]]
-  
-  fn_name <- if (!is.null(names(csv_list))) names(csv_list)[i] else paste0("Function_", i)
+non_linear_assoc$code_name <- paste0("code",non_linear_assoc$code)
 
-  match_key <- sub("^code", "", fn_name)
+for (code_name in intersect(names(csv_list), non_linear_assoc$code_name)) {
   
-  unit <- non_linear_assoc$Metric[i]
+  #Data
+  csv_data <- csv_list[[code_name]]
+  plot_df <- data.frame(
+    x_vals <- csv_data[[1]],
+    y_vals <- csv_data[[2]]
+  )
+  #Match 
+  meta_row <- non_linear_assoc[non_linear_assoc$code_name == code_name, ]
+  if (nrow(meta_row) == 0) next  #Skips if code is not found
+  
+  unit <- meta_row$Metric
   if (is.na(unit) || unit == "") unit <- "unknown unit"
   
-  exposure <- non_linear_assoc$Exposure[i]
-  outcome <- non_linear_assoc$Outcome[i]  
-  title <- paste(exposure, "and", outcome)
+  exposure <- meta_row$Exposure
+  outcome <- meta_row$Outcome
+  title <- paste0(exposure, " and ", outcome)
   x_label <- paste0("Intake ", unit, "/day")
+  
+  #Prep plot data
   ord <- order(x_vals)
   x_vals <- x_vals[ord]
   y_vals <- y_vals[ord]
-
-  #File name
-  png_filename <- file.path(output_dir, paste0("plot_", fn_name, ".png"))
   
-  #Plots
+  #File name
+  png_filename <- file.path(output_dir, paste0("plot_", code_name, ".png"))
+  
+  # --- Plot creation ---
   png(png_filename, width = 600, height = 400)
-
-    plot(NULL, xlim = c(min(x_vals) - 1, max(x_vals) + 1),
-       ylim = range(y_vals) + c(-0.5, 0.5),
-       xlab = x_label, ylab = "Relative Risk",
-       main = title,  
-       type = "n")
-
+  
+  plot(
+    NULL,
+    xlim = c(min(x_vals) - 1, max(x_vals) + 1),
+    ylim = range(y_vals) + c(-0.5, 0.5),
+    xlab = x_label,
+    ylab = "Relative Risk",
+    main = title,
+    type = "n"
+  )
+  
+  # Draw line segments and points
   for (j in 1:(length(x_vals) - 1)) {
     segments(x_vals[j], y_vals[j], x_vals[j + 1], y_vals[j], col = "blue", lwd = 2)
     points(x_vals[j], y_vals[j], pch = 16, col = "blue")
     points(x_vals[j + 1], y_vals[j], pch = 1, col = "blue")
   }
-
-  segments(x_vals[length(x_vals)], y_vals[length(y_vals)],
-           max(x_vals) + 2, y_vals[length(y_vals)], col = "blue", lwd = 2)
+  
+  # Extend last segment
+  segments(
+    x_vals[length(x_vals)], y_vals[length(y_vals)],
+    max(x_vals) + 2, y_vals[length(y_vals)],
+    col = "blue", lwd = 2
+  )
   points(x_vals[length(x_vals)], y_vals[length(y_vals)], pch = 16, col = "blue")
-
+  
   dev.off()
 }
 
