@@ -17,7 +17,7 @@ library(ggplot2)
 This is an excel version of Table 2 from the manuscript located in the folder "data". 
 
 ```{r summary}
-associations <- read_excel(file.path("data","Table2.xlsx")) #test
+associations <- read_excel(file.path("data","Table2.xlsx"))
 ```
 
 #Step 2 - Clean the Data
@@ -234,4 +234,5 @@ linear_functions$function_66(100) #100g/day
 nonlin_functions$function_18(10)
 nonlin_functions$function_18(50)
 nonlin_functions$function_18(100)
+
 ```
