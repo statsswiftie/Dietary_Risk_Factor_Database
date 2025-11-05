@@ -17,7 +17,7 @@ library(ggplot2)
 This is an excel version of Table 2 from the manuscript located in the folder "data". 
 
 ```{r summary}
-associations <- read_excel(file.path("data","Table2.xlsx"))
+associations <- read_excel(file.path("data","Table2.xlsx")) #test
 ```
 
 #Step 2 - Clean the Data
