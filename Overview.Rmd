@@ -43,11 +43,36 @@ main_key <- associations[,c(2,3,4,5,6,11,12,16)] #Exposure, Outcome, Dose, Obser
 ```
 
 #Step 3 - Functions of the Lines
+For linear function, the slope is applied in the observable range if provided and RR below and above the observable range are kept constant with the closest known point. 
+
+If no observable range was available, the curve begins at zero and continues infinitely. 
 
 ```{r linefunction}
 
-linear_function <-  function(R,d,x) {
-  exp((log(R)/d)*x)
+linear_function_range <- function(R, d, x, min_dose, max_dose) { #R is relative risk, d is increment, x is change in intake, min_dose is lowest observable value, max_dose is highest observable value
+  #Slope per unit
+  beta <- log(R)/d
+  #Result vector
+  result <- numeric(length(x))
+  #If either min or max dose is NA, ignore bounds and use original formula
+  if (is.na(min_dose) | is.na(max_dose)) {
+    result <- exp(beta * x)
+  } else {
+    for (i in seq_along(x)) {
+      if (x[i] < min_dose) {
+        #Below observed range → same as minimum
+        result[i] <- exp(beta * min_dose)
+      } else if (x[i] > max_dose) {
+        #Above observed range → same as maximum
+        result[i] <- exp(beta * max_dose)
+      } else {
+        #Within observed range → linear slope
+        result[i] <- exp(beta * x[i])
+      }
+    }
+  }
+  
+  return(result)
 }
 
 linear_function_CI <- function(R, lower, upper, d, x) {
@@ -119,6 +144,7 @@ Creates a list of the linear function according to their code. Uncertainty is re
 ```{r linearfunctions}
 linear_functions <- list()
 
+#add observable ranges
 for(i in seq_len(nrow(linear_assoc))){
   code_p <- linear_assoc$code[i]
   rr_p <- linear_assoc$Estimate[i]
@@ -127,7 +153,7 @@ for(i in seq_len(nrow(linear_assoc))){
   linear_functions[[paste0("function_",code_p)]] <- local({
     R <- rr_p
     d <- dose_p
-    function(x) linear_function(R,d,x)
+    function(x) linear_function_range(R,d,x)
   })
 }
 ```
