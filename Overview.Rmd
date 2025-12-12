@@ -39,7 +39,7 @@ associations$Grade <- substr(associations$Grade, 1, nchar(associations$Grade) - 
 
 associations$code <- row.names(associations)
 
-main_key <- associations[,c(2,3,4,5,6,11,12,15)] #Exposure, Outcome, Dose, Observable Range, Grade, Linearity
+main_key <- associations[,c(2,3,4,5,6,11,12,15)] #Exposure, Outcome, Dose, Observable Range, Risk Estimate, Grade, Linearity, code
 ```
 
 #Step 3 - Functions of the Lines
@@ -169,7 +169,7 @@ for(i in seq_len(nrow(linear_assoc))){
   rr_p <- linear_assoc$Estimate[i]
   dose_p <- linear_assoc$Dose[i]
   min_dos_p <- linear_assoc$lower_exp[i]
-  max_dos_p <- linear_assoc$upper_exp
+  max_dos_p <- linear_assoc$upper_exp[i]
   
   linear_functions[[paste0("function_",code_p)]] <- local({
     R <- rr_p
@@ -190,13 +190,15 @@ for (i in seq_len(nrow(linear_assoc))) {
   lower_p <- linear_assoc$Lower[i]
   upper_p <- linear_assoc$Upper[i]
   dose_p <- linear_assoc$Dose[i]
+  max_dose_p <- linear_assoc$upper_exp[i]
   
   linear_functions_CI[[paste0("function_CI_", code_p)]] <- local({
     R <- rr_p
     lower <- lower_p
     upper <- upper_p
     d <- dose_p
-    function(x) linear_function_CI(R, lower, upper, d, x)
+    max_dose <- max_dose_p
+    function(x) linear_function_CI(R, lower, upper, d, x, max_dose)
   })
 }
 ```
