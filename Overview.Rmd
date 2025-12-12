@@ -237,7 +237,7 @@ names(nonlin_functions) <- new_names
 #Step 6 - Plots 
 
 ```{r linear}
-output_dir <- file.path("C:/Users/aeja/Metrix3_C/plots_database")
+output_dir <- file.path("plots")
 dir.create(output_dir, showWarnings = FALSE)
 
 linear_plots <- linear_assoc[linear_assoc$Linearity == "linear",]
