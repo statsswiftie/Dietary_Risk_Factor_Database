@@ -1,5 +1,5 @@
 ---
-title: "Dietary Risk Factor Dose-Response Curves V2.0"
+title: "Dietary Risk Factor Dose-Response Curves V2.1"
 author: "A. Jacob"
 date: "`r Sys.Date()`"
 output: html_document
@@ -17,7 +17,7 @@ library(ggplot2)
 This is an excel version of Table 2 from the manuscript located in the folder "data". 
 
 ```{r summary}
-associations <- read_excel(file.path("data","Table2_all.xlsx"))
+associations <- read_excel(file.path("data","Table2_159.xlsx"))
 ```
 
 #Step 2 - Clean the Data
@@ -33,33 +33,77 @@ associations$Linearity <- gsub("[–—−]", "-",
                               gsub("\u00A0", "", 
                                 trimws(tolower(associations$Linearity)))))  
 
-associations$Grade2 <- sub("\u00A0.*", "", associations$Grade2) #strange spacing in the column
-associations$Grade2 <- sub(" .*", "", associations$Grade2)
-associations$Grade2 <- substr(associations$Grade2, 1, nchar(associations$Grade2) - 1) #remove subscript
+associations$Grade <- sub("\u00A0.*", "", associations$Grade) #strange spacing in the column
+associations$Grade <- sub(" .*", "", associations$Grade)
+associations$Grade <- substr(associations$Grade, 1, nchar(associations$Grade) - 1) #remove subscript
 
 associations$code <- row.names(associations)
 
-main_key <- associations[,c(13,2,3,4,5,10,11)] #Exposure, Outcome, Grade, Linearity
+main_key <- associations[,c(2,3,4,5,6,11,12,15)] #Exposure, Outcome, Dose, Observable Range, Risk Estimate, Grade, Linearity, code
 ```
 
 #Step 3 - Functions of the Lines
+For linear function, the slope is applied from zero to the maximum observable range if provided. RR estimates above the observable range are kept constant with the last known point. 
+
+If no observable range was available, the curve begins at zero and continues infinitely. 
 
 ```{r linefunction}
-
-linear_function <-  function(R,d,x) {
-  exp((log(R)/d)*x)
+#linear function with estimate only
+linear_function <- function(R, d, x, min_dose, max_dose) { #R is relative risk, d is increment, x is intake, min_dose is lowest observable value, max_dose is highest observable value
+  #Slope per unit
+  beta <- log(R)/d
+  #Result vector
+  result <- numeric(length(x))
+  #If either min or max dose is NA, ignore bounds and use original formula
+  if (is.na(min_dose) | is.na(max_dose)) {
+    result <- exp(beta * x)
+  } else {
+    for (i in seq_along(x)) {
+      if (x[i] > max_dose) {
+        #Above observed range → same as maximum
+        result[i] <- exp(beta * max_dose)
+      } else {
+        #Within observed range → linear slope
+        result[i] <- exp(beta * x[i])
+      }
+    }
+  }
+  
+  return(result)
 }
 
-linear_function_CI <- function(R, lower, upper, d, x) {
-  estimate <- exp((log(R)/d)*x)
-  lower_bound <- exp(log(lower)/d*x)
-  upper_bound <- exp(log(upper)/d*x)
-  cat("x =", x, "\n")
-  cat("Estimate =", estimate, "\n")
-  cat("Lower bound =", lower_bound, "\n")
-  cat("Upper bound =", upper_bound, "\n")
+#linear function with estimate and 95% confidence interval
+linear_function_CI <- function(R, lower, upper, d, x, max_dose) {
+  #Slope and standard error (SE) per unit dose
+  beta <- log(R) / d
+  se_inc <- (log(upper) - log(lower)) / (2 * 1.96)  # assumes 95% CI
+  se_unit <- se_inc / d
+  
+  #Confidence multiplier
+  z <- abs(qnorm((1 - 0.95) /2)) #95% cI
+  
+  #Apply max_dose if provided
+  if (!is.na(max_dose)) {
+    dose_eff <- pmin(x, max_dose) #takes the smaller of the two values
+  } else {
+    dose_eff <- x
+  }
+  
+  #Ln-scale RR and CI
+  logRR <- beta * dose_eff
+  logRR_lower <- logRR - z * se_unit * dose_eff
+  logRR_upper <- logRR + z * se_unit * dose_eff
+  
+  #Back-transform to RR scale
+  data.frame(
+    dose = x,
+    RR = exp(logRR),
+    CI_lower = exp(logRR_lower),
+    CI_upper = exp(logRR_upper)
+  )
 }
 
+#non-linear function - no uncertainty extracted
 non_linear_function <- function(x_coords, y_coords) {
   function(z) {
     idx <- findInterval(z, x_coords, rightmost.closed = TRUE)
@@ -77,19 +121,34 @@ All associations are included - either linear or summary estimates provided.
 
 linear_assoc <- main_key
 
-linear_assoc$`Dose/Metric` <- gsub("\\s+", "", linear_assoc$`Dose/Metric`) #removes spaces
+linear_assoc$`Additional Increment` <- gsub("\\s+", "", linear_assoc$`Additional Increment`) #removes spaces
 
-linear_assoc$`Dose/Metric` <- sub("([a-zA-Zµ]+)[0-9]+$", "\\1", linear_assoc$`Dose/Metric`) #remove trailing digits (superscript)
+linear_assoc$`Additional Increment` <- sub("([a-zA-Zµ]+)[0-9]+$", "\\1", linear_assoc$`Additional Increment`) #remove trailing digits (superscript)
 
 linear_assoc <- linear_assoc %>%
-  extract(`Dose/Metric`, into = c("Dose", "Metric"),
+  extract(`Additional Increment`, into = c("Dose", "Metric"),
           regex = "([0-9\\.]+)([a-zA-Zµ]+)", remove = TRUE) #dose and metric separated
 
 linear_assoc$Dose <- as.numeric(linear_assoc$Dose)
 
-#note that association code 63 is 100 to 200g
+#note that association code 65 is 100 to 200g
 
-colnames(linear_assoc)[6] <- "RR" 
+#Manage observable range
+linear_assoc <- linear_assoc %>%
+  mutate(
+    `Observable Range` = str_remove_all(`Observable Range`, ","),
+    `Observable Range` = str_trim(`Observable Range`), 
+    `Observable Range` = na_if(`Observable Range`, "Not provided"), 
+    `Observable Range` = na_if(`Observable Range`, "unclear")
+  ) %>%
+  extract(
+    `Observable Range`, 
+    into = c("lower_exp", "upper_exp"), 
+     regex = "([0-9]+\\.?[0-9]*)\\s*-\\s*([0-9]+\\.?[0-9]*)",
+    convert = TRUE
+  )
+
+colnames(linear_assoc)[7] <- "RR" 
 
 linear_assoc <- linear_assoc %>%
   extract(RR, 
@@ -104,15 +163,20 @@ Creates a list of the linear function according to their code. Uncertainty is re
 ```{r linearfunctions}
 linear_functions <- list()
 
+#add observable ranges
 for(i in seq_len(nrow(linear_assoc))){
   code_p <- linear_assoc$code[i]
   rr_p <- linear_assoc$Estimate[i]
   dose_p <- linear_assoc$Dose[i]
+  min_dos_p <- linear_assoc$lower_exp[i]
+  max_dos_p <- linear_assoc$upper_exp[i]
   
   linear_functions[[paste0("function_",code_p)]] <- local({
     R <- rr_p
     d <- dose_p
-    function(x) linear_function(R,d,x)
+    min_dose <- min_dos_p
+    max_dose <- max_dos_p
+    function(x) linear_function(R,d,x,min_dose,max_dose)
   })
 }
 ```
@@ -126,13 +190,15 @@ for (i in seq_len(nrow(linear_assoc))) {
   lower_p <- linear_assoc$Lower[i]
   upper_p <- linear_assoc$Upper[i]
   dose_p <- linear_assoc$Dose[i]
+  max_dose_p <- linear_assoc$upper_exp[i]
   
   linear_functions_CI[[paste0("function_CI_", code_p)]] <- local({
     R <- rr_p
     lower <- lower_p
     upper <- upper_p
     d <- dose_p
-    function(x) linear_function_CI(R, lower, upper, d, x)
+    max_dose <- max_dose_p
+    function(x) linear_function_CI(R, lower, upper, d, x, max_dose)
   })
 }
 ```
@@ -143,14 +209,14 @@ for (i in seq_len(nrow(linear_assoc))) {
 non_linear_assoc <- main_key[main_key$Linearity=="non-linear",]
 
 non_linear_assoc <- non_linear_assoc %>%
-  extract(`Dose/Metric`, into = c("Dose", "Metric"),
+  extract(`Additional Increment`, into = c("Dose", "Metric"),
           regex = "([0-9\\.]+)([a-zA-Zµ]+)", remove = TRUE) #dose and metric separated
 ```
 
 #Step 5B - Non-Linear Curves
 
 ```{r nonlinear curves}
-csv_files <- list.files(path = file.path("data", "CSV coordinates"), pattern = "\\.csv$", full.names = TRUE)
+csv_files <- list.files(path = file.path("data", "CSV_coordinates_159"), pattern = "\\.csv$", full.names = TRUE)
 csv_list <- lapply(csv_files, read.csv)
 names(csv_list) <- tools::file_path_sans_ext(basename(csv_files))
 ```
@@ -171,7 +237,7 @@ names(nonlin_functions) <- new_names
 #Step 6 - Plots 
 
 ```{r linear}
-output_dir <- file.path("plots")
+output_dir <- file.path("C:/Users/aeja/Metrix3_C/plots_database")
 dir.create(output_dir, showWarnings = FALSE)
 
 linear_plots <- linear_assoc[linear_assoc$Linearity == "linear",]
@@ -180,43 +246,57 @@ for (i in seq_len(nrow(linear_plots))) {
   
   # Row-specific values
   code_p <- linear_plots$code[i]
-  R <- linear_plots$Estimate[i]
-  lower <- linear_plots$Lower[i]
-  upper <- linear_plots$Upper[i]
-  d <- linear_plots$Dose[i]
+  R      <- linear_plots$Estimate[i]
+  lower  <- linear_plots$Lower[i]
+  upper  <- linear_plots$Upper[i]
+  d      <- linear_plots$Dose[i]        # increment used in the linear model
   
   unit <- linear_plots$Metric[i]
   if (is.na(unit) || unit == "") unit <- "unknown unit"
   
   exposure <- linear_plots$Exposure[i]
-  outcome <- linear_plots$Outcome[i]  
-  title <- paste(exposure, "and", outcome)
-  x_label <- paste0("Intake ", unit, "/day")
+  outcome  <- linear_plots$Outcome[i]  
+  title    <- paste(exposure, "and", outcome)
+  x_label  <- paste0("Intake ", unit, "/day")
   
-  # X axis goes from zero to dose
+  # X axis goes from zero → upper plotting limit equals the increment d
   x_vals <- seq(0, d, length.out = 200)
   
-  # Compute estimate, lower, upper
-  estimate <- exp((log(R)/d) * x_vals)
-  lower_bound <- exp((log(lower)/d) * x_vals)
-  upper_bound <- exp((log(upper)/d) * x_vals)
+  # Compute estimate + CI using the new function
+  df <- linear_function_CI(
+    R = R,
+    lower = lower,
+    upper = upper,
+    d = d,
+    x = x_vals,
+    max_dose = d       # ensures the curve does not extend beyond the increment
+  )
   
-  # Output files
+  # Output file
   png_filename <- file.path(output_dir, paste0("plot_linear_", code_p, ".png"))
   png(png_filename, width = 800, height = 600)
   
   # Plot setup
-  plot(x_vals, estimate, type = "n", 
-       xlab = x_label, ylab = "Relative Risk", main = title,
-       xlim = c(0, d), ylim = range(c(lower_bound, upper_bound, estimate)))
+  plot(
+    df$dose, df$RR, type = "n",
+    xlab = x_label, 
+    ylab = "Relative Risk",
+    main = title,
+    xlim = c(0, d),
+    ylim = range(c(df$CI_lower, df$CI_upper))
+  )
   
-  # Uncertainty bands
-  polygon(c(x_vals, rev(x_vals)), c(upper_bound, rev(lower_bound)),
-          col = rgb(0, 0, 1, 0.2), border = NA)
+  # Uncertainty band
+  polygon(
+    c(df$dose, rev(df$dose)),
+    c(df$CI_upper, rev(df$CI_lower)),
+    col = rgb(0, 0, 1, 0.2), 
+    border = NA
+  )
   
-  # Draw main line and points
-  lines(x_vals, estimate, col = "blue", lwd = 2)
-  points(x_vals, estimate, col = "blue", pch = 16, cex = 0.6)
+  # Main line + points
+  lines(df$dose, df$RR, col = "blue", lwd = 2)
+  points(df$dose, df$RR, col = "blue", pch = 16, cex = 0.6)
   
   dev.off()
 }
@@ -293,15 +373,14 @@ for (code_name in intersect(names(csv_list), non_linear_assoc$code_name)) {
 There are now 101 functions that can be used as well as plot outputs for visualisation of curves. Note that uncertainty is not accounted for here and the user will need to determine how they would like to estimate uncertainty in their given study. To use the functions, one simply needs to call it as seen below.
 
 ```{r example of function use}
-#I would like to know the risk estimate for dementia based on fish intake (this is a linear association - code66)
-linear_functions$function_66(10) #10g/day
-linear_functions$function_66(50) #50g/day
-linear_functions$function_66(100) #100g/day
-linear_functions_CI$function_CI_66(10) #gives the estimate along with CI
+#I would like to know the risk estimate for dementia based on fish intake (this is a linear association - code91)
+linear_functions$function_91(10) #10g/day
+linear_functions$function_91(50) #50g/day
+linear_functions$function_91(100) #100g/day
+linear_functions_CI$function_CI_91(10) #gives the estimate along with CI
 
 #What about SSBs intake and Prostate Cancer incidence? (non-linear association - code18)
 nonlin_functions$function_18(10)
 nonlin_functions$function_18(50)
 nonlin_functions$function_18(100)
-
 ```
